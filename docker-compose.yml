@@ -1,0 +1,20 @@
+services:
+  p2psearch:
+    build: .
+    image: p2psearch:latest
+    container_name: p2psearch
+    ports:
+      - "8080:8080"
+      - "4661:4661"
+      - "4662:4662/udp"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      CONFIG_PATH: /app/config.yaml
+      HTTP_ADDR: ":8080"
+      GOED2K_KAD: "1"
+      GOED2K_UPNP: "0"
+      # Optional:
+      # GOED2K_SERVERS: "176.123.5.89:4725,85.17.116.222:6082"
+      # network_mode: host   # if ISP blocks mapped ports
+    restart: unless-stopped

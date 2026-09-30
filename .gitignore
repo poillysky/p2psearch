@@ -1,0 +1,14 @@
+bin/
+dist/
+data/
+.tools/
+.workbuddy/
+*.exe
+*.log
+.DS_Store
+.idea/
+.vscode/
+
+# Local runtime config may contain 115 cookies / proxy secrets.
+config.yaml
+*.local.yaml

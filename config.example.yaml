@@ -1,0 +1,45 @@
+# Copy to config.yaml and edit as needed.
+#   copy config.example.yaml config.yaml
+#
+# Do not commit real cookies / proxy passwords.
+http:
+    addr: :8080
+proxy:
+    url: ""
+engine:
+    listen_port: 4661
+    udp_port: 4662
+    enable_kad: true
+    enable_upnp: true
+bootstrap:
+    servers:
+        - 176.123.5.89:4725
+        - 77.42.68.79:4232
+        - 85.17.116.222:6082
+        - 91.208.162.87:4232
+        - 85.121.5.137:4232
+    all_servers:
+        - 212.95.35.240:4232
+        - 213.141.198.207:4232
+        - 57.131.35.107:4232
+        - 212.95.35.240:4323
+        - 91.208.162.55:4235
+        - 193.187.90.12:4661
+        - 91.126.170.253:5687
+    server_met_urls:
+        - http://upd.emule-security.org/server.met
+    nodes_dat_urls:
+        - https://upd.emule-security.org/nodes.dat
+        - http://www.alldivx.de/nodes/nodes.dat
+    max_priority_servers: 5
+    max_total_servers: 18
+    refresh_hours: 8
+search:
+    default_wait_sec: 25
+    default_limit: 0
+    max_limit: 10000
+offline_115:
+    enabled: false
+    cookie: ""
+    wp_path_id: "0"
+    wp_path_name: 根目录

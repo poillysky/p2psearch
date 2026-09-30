@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#14181f" />
+  <meta name="color-scheme" content="dark" />
+  <title>设置 · P2P Search</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2314181f'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%232fad9a'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body class="page-settings">
+  <div class="atmosphere" aria-hidden="true"></div>
+
+  <header class="topnav">
+    <a class="brand-mark" href="/" aria-label="P2P Search 首页">
+      <span class="brand-signal"></span>
+      <span class="brand-word">P2P Search</span>
+    </a>
+    <nav class="topnav-nav" aria-label="主导航">
+      <a class="nav-link" href="/">搜索</a>
+      <a class="nav-link active" href="/settings" aria-current="page">设置</a>
+    </nav>
+  </header>
+
+  <main class="compose compose-settings">
+    <header class="page-head">
+      <h1>设置</h1>
+    </header>
+
+    <form class="settings" id="settingsForm">
+      <fieldset disabled id="settingsFields" class="settings-fields">
+        <section class="field-block">
+          <h2>出站代理</h2>
+          <label for="proxy_url">
+            <span>代理 URL</span>
+            <input type="text" id="proxy_url" name="proxy_url" placeholder="留空 = 直连 · socks5://192.168.2.88:7891" autocomplete="off" spellcheck="false" />
+          </label>
+          <p class="hint">支持 http / socks5。空表示直连。</p>
+        </section>
+
+        <section class="field-block">
+          <h2>搜索默认值</h2>
+          <div class="grid-3">
+            <label for="default_wait_sec">
+              <span>默认等待（秒）</span>
+              <input type="number" id="default_wait_sec" name="default_wait_sec" min="1" max="300" />
+            </label>
+            <label for="default_limit">
+              <span>默认条数（0 = 不限制）</span>
+              <input type="number" id="default_limit" name="default_limit" min="0" />
+            </label>
+            <label for="max_limit">
+              <span>最大条数</span>
+              <input type="number" id="max_limit" name="max_limit" min="1" />
+            </label>
+          </div>
+        </section>
+
+        <section class="field-block">
+          <h2>引擎与网络</h2>
+          <div class="grid-3">
+            <label for="listen_port">
+              <span>TCP 端口</span>
+              <input type="number" id="listen_port" name="listen_port" min="1" max="65535" />
+            </label>
+            <label for="udp_port">
+              <span>UDP 端口</span>
+              <input type="number" id="udp_port" name="udp_port" min="1" max="65535" />
+            </label>
+            <label for="refresh_hours">
+              <span>刷新（小时）</span>
+              <input type="number" id="refresh_hours" name="refresh_hours" min="1" />
+            </label>
+          </div>
+          <div class="checks">
+            <label class="check" for="enable_kad"><input type="checkbox" id="enable_kad" name="enable_kad" /> 启用 KAD</label>
+            <label class="check" for="enable_upnp"><input type="checkbox" id="enable_upnp" name="enable_upnp" /> 启用 UPnP</label>
+          </div>
+        </section>
+
+        <section class="field-block">
+          <h2>服务器连接</h2>
+          <div class="grid-2">
+            <label for="max_priority_servers">
+              <span>优先服务器数</span>
+              <input type="number" id="max_priority_servers" name="max_priority_servers" min="1" />
+            </label>
+            <label for="max_total_servers">
+              <span>总连接上限</span>
+              <input type="number" id="max_total_servers" name="max_total_servers" min="1" />
+            </label>
+          </div>
+          <div class="src-block" data-kind="server" id="priorityBlock">
+            <div class="field-label-row">
+              <span>优先服务器（并发搜索）</span>
+              <div class="table-toolbar">
+                <button type="button" class="ghost" id="fillPriorityBtn">按文件数填充</button>
+                <button type="button" class="ghost" data-probe-table="priority">测通</button>
+                <button type="button" class="ghost src-add" data-add="priority">+ 添加</button>
+              </div>
+            </div>
+            <div class="src-table is-server" role="table" aria-label="优先服务器">
+              <div class="src-head" role="row">
+                <span role="columnheader">名称</span>
+                <span role="columnheader" class="src-col-files">资源数</span>
+                <span role="columnheader">地址</span>
+                <span role="columnheader" class="src-col-probe">测通</span>
+                <span role="columnheader" class="src-col-act"></span>
+              </div>
+              <div class="src-body" id="priorityBody" role="rowgroup"></div>
+            </div>
+          </div>
+
+          <div class="src-block" data-kind="server" id="allServersBlock">
+            <div class="field-label-row">
+              <span>备用服务器（优先失败时自动切换）</span>
+              <div class="table-toolbar">
+                <button type="button" class="ghost" id="fillAllBtn">按文件数填充</button>
+                <button type="button" class="ghost" data-probe-table="all">测通</button>
+                <button type="button" class="ghost src-add" data-add="all">+ 添加</button>
+              </div>
+            </div>
+            <div class="src-table is-server" role="table" aria-label="完整服务器">
+              <div class="src-head" role="row">
+                <span role="columnheader">名称</span>
+                <span role="columnheader" class="src-col-files">资源数</span>
+                <span role="columnheader">地址</span>
+                <span role="columnheader" class="src-col-probe">测通</span>
+                <span role="columnheader" class="src-col-act"></span>
+              </div>
+              <div class="src-body" id="allServersBody" role="rowgroup"></div>
+            </div>
+          </div>
+
+          <div class="src-block" data-kind="url" id="metBlock">
+            <div class="field-label-row">
+              <span>server.met 源</span>
+              <div class="table-toolbar">
+                <button type="button" class="ghost" data-probe-table="met">测通</button>
+                <button type="button" class="ghost src-add" data-add="met">+ 添加</button>
+              </div>
+            </div>
+            <div class="src-table" role="table" aria-label="server.met">
+              <div class="src-head" role="row">
+                <span role="columnheader">名称</span>
+                <span role="columnheader">地址</span>
+                <span role="columnheader" class="src-col-probe">测通</span>
+                <span role="columnheader" class="src-col-act"></span>
+              </div>
+              <div class="src-body" id="metBody" role="rowgroup"></div>
+            </div>
+          </div>
+
+          <div class="src-block" data-kind="url" id="nodesBlock">
+            <div class="field-label-row">
+              <span>nodes.dat 源</span>
+              <div class="table-toolbar">
+                <button type="button" class="ghost" data-probe-table="nodes">测通</button>
+                <button type="button" class="ghost src-add" data-add="nodes">+ 添加</button>
+              </div>
+            </div>
+            <div class="src-table" role="table" aria-label="nodes.dat">
+              <div class="src-head" role="row">
+                <span role="columnheader">名称</span>
+                <span role="columnheader">地址</span>
+                <span role="columnheader" class="src-col-probe">测通</span>
+                <span role="columnheader" class="src-col-act"></span>
+              </div>
+              <div class="src-body" id="nodesBody" role="rowgroup"></div>
+            </div>
+          </div>
+
+          <div class="settings-actions probe-actions">
+            <button type="button" class="ghost" id="probeBtn">全部测通</button>
+            <span class="meta" id="probeMsg" role="status" aria-live="polite"></span>
+          </div>
+        </section>
+
+        <section class="field-block">
+          <h2>115 网盘离线转存</h2>
+          <div class="checks">
+            <label class="check" for="offline_115_enabled"><input type="checkbox" id="offline_115_enabled" name="offline_115_enabled" /> 启用一键离线转存</label>
+          </div>
+          <div class="cookie-field" id="cookieField">
+            <span class="field-label">Cookie（浏览器登录 115 后复制，需含 UID / CID / SEID）</span>
+            <div class="cookie-edit" id="cookieEdit">
+              <textarea id="offline_115_cookie" name="offline_115_cookie" rows="3" spellcheck="false" autocomplete="off" placeholder="UID=...; CID=...; SEID=...; KID=..."></textarea>
+            </div>
+            <div class="cookie-mask" id="cookieMask" hidden>
+              <div class="folder-pick-row">
+                <div class="folder-pick-value cookie-mask-value" id="cookieMaskValue">已填写</div>
+                <button type="button" class="ghost" id="cookieRevealBtn">显示</button>
+                <button type="button" class="ghost" id="cookieChangeBtn">更换</button>
+              </div>
+            </div>
+          </div>
+          <div class="folder-pick-field">
+            <span class="field-label">离线保存到</span>
+            <div class="folder-pick-row">
+              <input type="hidden" id="offline_115_wp_path_id" name="offline_115_wp_path_id" value="0" />
+              <div class="folder-pick-value" id="offline115PathLabel" title="根目录">根目录</div>
+              <button type="button" class="ghost" id="pick115FolderBtn">选择文件夹</button>
+            </div>
+          </div>
+          <p class="hint">配置后，搜索结果可一键推送到所选文件夹的离线任务。Cookie 仅保存在本机 config.yaml。</p>
+        </section>
+      </fieldset>
+
+      <div class="settings-actions">
+        <button type="submit" id="saveBtn" disabled>保存设置</button>
+        <span class="meta" id="saveMsg" role="status" aria-live="polite">加载中…</span>
+      </div>
+    </form>
+  </main>
+
+  <dialog class="probe-dialog" id="probeDialog" aria-labelledby="probeDialogTitle">
+    <div class="probe-dialog-head">
+      <h2 id="probeDialogTitle">连通性测试结果</h2>
+      <button type="button" class="ghost" id="probeCloseBtn" aria-label="关闭">关闭</button>
+    </div>
+    <div class="probe-summary" id="probeSummary"></div>
+    <div class="probe-results" id="probeResults"></div>
+    <div class="probe-dialog-foot">
+      <button type="button" id="probeDoneBtn">完成</button>
+    </div>
+  </dialog>
+
+  <dialog class="probe-dialog folder-dialog" id="folderDialog" aria-labelledby="folderDialogTitle">
+    <div class="probe-dialog-head">
+      <h2 id="folderDialogTitle">选择 115 文件夹</h2>
+      <button type="button" class="ghost" id="folderCloseBtn" aria-label="关闭">关闭</button>
+    </div>
+    <nav class="folder-crumb" id="folderCrumb" aria-label="路径"></nav>
+    <div class="folder-list" id="folderList" role="list"></div>
+    <p class="folder-msg meta" id="folderMsg" role="status" aria-live="polite"></p>
+    <div class="probe-dialog-foot folder-dialog-foot">
+      <button type="button" class="ghost" id="folderCancelBtn">取消</button>
+      <button type="button" id="folderSelectBtn">选择当前文件夹</button>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/settings.js"></script>
+</body>
+</html>

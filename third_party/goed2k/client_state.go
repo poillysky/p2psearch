@@ -1,0 +1,399 @@
+package goed2k
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+
+	"github.com/goed2k/core/data"
+	"github.com/goed2k/core/disk"
+	"github.com/goed2k/core/protocol"
+)
+
+const clientStateVersion = 7
+
+type ClientCategoryState struct {
+	Name          string `json:"name"`
+	OutputDir     string `json:"output_dir"`
+	AutoExtension string `json:"auto_extension"`
+}
+
+type ClientStateStore interface {
+	Load() (*ClientState, error)
+	Save(state *ClientState) error
+}
+
+type ClientState struct {
+	Version         int                     `json:"version"`
+	ServerAddress   string                  `json:"server_address,omitempty"`
+	IdentityVersion int                     `json:"identity_version,omitempty"`
+	IdentityKeyPath string                  `json:"identity_key_path,omitempty"`
+	Transfers       []ClientTransferState   `json:"transfers"`
+	Credits         []ClientCreditState     `json:"credits,omitempty"`
+	FriendSlots     []protocol.Hash         `json:"friend_slots,omitempty"`
+	DHT             *ClientDHTState         `json:"dht,omitempty"`
+	DHTv6           *ClientDHTv6State       `json:"dhtv6,omitempty"`
+	SharedDirs      []string                `json:"shared_dirs,omitempty"`
+	SharedFiles     []ClientSharedFileState `json:"shared_files,omitempty"`
+	BannedPeers     []protocol.Endpoint     `json:"banned_peers,omitempty"`
+	Categories      []ClientCategoryState   `json:"categories,omitempty"`
+}
+
+// ClientSharedFileState 持久化的共享文件元数据。
+type ClientSharedFileState struct {
+	Hash        protocol.Hash   `json:"hash"`
+	Size        int64           `json:"size"`
+	Path        string          `json:"path"`
+	Name        string          `json:"name"`
+	PieceHashes []protocol.Hash `json:"piece_hashes,omitempty"`
+	Origin      SharedOrigin    `json:"origin"`
+	Completed   bool            `json:"completed"`
+	LastHashAt  int64           `json:"last_hash_at,omitempty"`
+}
+
+type ClientTransferState struct {
+	Hash         protocol.Hash                `json:"hash"`
+	Size         int64                        `json:"size"`
+	CreateTime   int64                        `json:"create_time"`
+	TargetPath   string                       `json:"target_path"`
+	Paused       bool                         `json:"paused"`
+	UploadPrio   UploadPriority               `json:"upload_prio,omitempty"`
+	DownloadPrio TransferPriority             `json:"download_prio,omitempty"`
+	ResumeData   *protocol.TransferResumeData `json:"resume_data,omitempty"`
+	HttpSources  []string                     `json:"http_sources,omitempty"`
+}
+
+type ClientDHTState struct {
+	SelfID              protocol.Hash        `json:"self_id,omitempty"`
+	Firewalled          bool                 `json:"firewalled"`
+	LastBootstrap       int64                `json:"last_bootstrap,omitempty"`
+	LastRefresh         int64                `json:"last_refresh,omitempty"`
+	LastFirewalledCheck int64                `json:"last_firewalled_check,omitempty"`
+	StoragePoint        string               `json:"storage_point,omitempty"`
+	Nodes               []ClientDHTNodeState `json:"nodes,omitempty"`
+	RouterNodes         []string             `json:"router_nodes,omitempty"`
+}
+
+type ClientDHTNodeState struct {
+	ID        protocol.Hash `json:"id,omitempty"`
+	Addr      string        `json:"addr"`
+	TCPPort   uint16        `json:"tcp_port,omitempty"`
+	Version   byte          `json:"version,omitempty"`
+	Seed      bool          `json:"seed,omitempty"`
+	HelloSent bool          `json:"hello_sent,omitempty"`
+	Pinged    bool          `json:"pinged,omitempty"`
+	FailCount int           `json:"fail_count,omitempty"`
+	FirstSeen int64         `json:"first_seen,omitempty"`
+	LastSeen  int64         `json:"last_seen,omitempty"`
+}
+
+type FileClientStateStore struct {
+	path string
+}
+
+func NewFileClientStateStore(path string) *FileClientStateStore {
+	return &FileClientStateStore{path: path}
+}
+
+func (s *FileClientStateStore) Path() string {
+	if s == nil {
+		return ""
+	}
+	return s.path
+}
+
+func (s *FileClientStateStore) Load() (*ClientState, error) {
+	if s == nil || s.path == "" {
+		return nil, errors.New("state path is empty")
+	}
+	raw, err := os.ReadFile(s.path)
+	if err != nil {
+		return nil, err
+	}
+	var state ClientState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return nil, err
+	}
+	if state.Version == 0 {
+		state.Version = clientStateVersion
+	}
+	return &state, nil
+}
+
+func (s *FileClientStateStore) Save(state *ClientState) error {
+	if s == nil || s.path == "" {
+		return errors.New("state path is empty")
+	}
+	if state == nil {
+		state = &ClientState{Version: clientStateVersion}
+	}
+	if state.Version == 0 {
+		state.Version = clientStateVersion
+	}
+	raw, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+		return err
+	}
+	tmpPath := s.path + ".tmp"
+	if err := os.WriteFile(tmpPath, raw, 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, s.path); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
+func (c *Client) SetStateStore(store ClientStateStore) {
+	c.stateStore = store
+}
+
+func (c *Client) StateStore() ClientStateStore {
+	return c.stateStore
+}
+
+func (c *Client) SetStatePath(path string) {
+	if path == "" {
+		c.stateStore = nil
+		return
+	}
+	c.stateStore = NewFileClientStateStore(path)
+}
+
+func (c *Client) StatePath() string {
+	fileStore, ok := c.stateStore.(*FileClientStateStore)
+	if !ok || fileStore == nil {
+		return ""
+	}
+	return fileStore.Path()
+}
+
+func (c *Client) SaveState(path string) error {
+	if path != "" {
+		c.SetStatePath(path)
+	}
+	if c.stateStore == nil {
+		return errors.New("state store is not configured")
+	}
+	state, err := c.snapshotState()
+	if err != nil {
+		return err
+	}
+	return c.stateStore.Save(state)
+}
+
+func (c *Client) LoadState(path string) error {
+	if path != "" {
+		c.SetStatePath(path)
+	}
+	if c.stateStore == nil {
+		return errors.New("state store is not configured")
+	}
+	state, err := c.stateStore.Load()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return c.applyState(state)
+}
+
+func (c *Client) snapshotState() (*ClientState, error) {
+	handles := c.session.GetTransfers()
+	sort.Slice(handles, func(i, j int) bool {
+		return handles[i].GetHash().String() < handles[j].GetHash().String()
+	})
+	state := &ClientState{
+		Version:         clientStateVersion,
+		ServerAddress:   c.serverAddr,
+		IdentityVersion: 0,
+		IdentityKeyPath: c.session.settings.IdentityKeyPath,
+		Transfers:       make([]ClientTransferState, 0, len(handles)),
+		Credits:         c.session.Credits().Snapshot(),
+		FriendSlots:     c.session.friendSlotSnapshot(),
+		BannedPeers:     c.session.snapshotBannedPeers(),
+	}
+	if len(c.session.settings.Categories) > 0 {
+		state.Categories = make([]ClientCategoryState, 0, len(c.session.settings.Categories))
+		for _, cat := range c.session.settings.Categories {
+			state.Categories = append(state.Categories, ClientCategoryState{
+				Name:          cat.Name,
+				OutputDir:     cat.OutputDir,
+				AutoExtension: cat.AutoExtension,
+			})
+		}
+	}
+	if id := c.session.Identity(); id != nil {
+		state.IdentityVersion = id.Version
+		if id.KeyPath() != "" {
+			state.IdentityKeyPath = id.KeyPath()
+		}
+	}
+	if tracker := c.GetDHTTracker(); tracker != nil {
+		state.DHT = tracker.SnapshotState()
+	}
+	if tracker := c.GetDHTv6Tracker(); tracker != nil {
+		state.DHTv6 = tracker.SnapshotState()
+	}
+	state.SharedDirs = c.session.ListSharedDirs()
+	for _, sf := range c.session.SharedFiles() {
+		if sf == nil {
+			continue
+		}
+		state.SharedFiles = append(state.SharedFiles, ClientSharedFileState{
+			Hash:        sf.Hash,
+			Size:        sf.FileSize,
+			Path:        sf.Path,
+			Name:        sf.Name,
+			PieceHashes: append([]protocol.Hash(nil), sf.PieceHashes...),
+			Origin:      sf.Origin,
+			Completed:   sf.Completed,
+			LastHashAt:  sf.LastHashAt,
+		})
+	}
+	for _, handle := range handles {
+		if !handle.IsValid() {
+			continue
+		}
+		path := handle.GetFilePath()
+		if path == "" {
+			continue
+		}
+		state.Transfers = append(state.Transfers, ClientTransferState{
+			Hash:         handle.GetHash(),
+			Size:         handle.GetSize(),
+			CreateTime:   handle.GetCreateTime(),
+			TargetPath:   path,
+			Paused:       handle.IsPaused(),
+			UploadPrio:   handle.transfer.UploadPriority(),
+			DownloadPrio: handle.transfer.DownloadPriority(),
+			ResumeData:   handle.GetResumeData(),
+			HttpSources:  handle.transfer.HttpSources(),
+		})
+	}
+	return state, nil
+}
+
+func (c *Client) applyState(state *ClientState) error {
+	if state == nil {
+		return nil
+	}
+	if state.Version != 0 && state.Version != 1 && state.Version != 2 && state.Version != 3 && state.Version != 4 && state.Version != clientStateVersion {
+		return errors.New("unsupported state version")
+	}
+	c.serverAddr = state.ServerAddress
+	if state.IdentityKeyPath != "" {
+		c.session.settings.IdentityKeyPath = state.IdentityKeyPath
+		if err := c.session.LoadIdentity(state.IdentityKeyPath); err != nil {
+			return fmt.Errorf("load identity from %q: %w", state.IdentityKeyPath, err)
+		}
+	} else if state.IdentityVersion != 0 {
+		if id := c.session.Identity(); id != nil {
+			id.Version = state.IdentityVersion
+		}
+	}
+	if len(state.Categories) > 0 {
+		cats := make([]Category, 0, len(state.Categories))
+		for _, rec := range state.Categories {
+			cats = append(cats, Category{
+				Name:          rec.Name,
+				OutputDir:     rec.OutputDir,
+				AutoExtension: rec.AutoExtension,
+			})
+		}
+		c.session.settings.Categories = cats
+	}
+	c.session.Credits().ApplySnapshot(state.Credits)
+	c.session.applyFriendSlotSnapshot(state.FriendSlots)
+	if state.DHT != nil {
+		if err := c.EnableDHT().ApplyState(state.DHT); err != nil {
+			return err
+		}
+	}
+	if state.DHTv6 != nil {
+		if err := c.EnableDHTv6().ApplyState(state.DHTv6); err != nil {
+			return err
+		}
+	}
+	c.session.mu.Lock()
+	c.session.sharedDirs = make([]string, 0, len(state.SharedDirs))
+	for _, d := range state.SharedDirs {
+		if nd, err := normalizeSharedPath(d); err == nil {
+			c.session.sharedDirs = append(c.session.sharedDirs, nd)
+		}
+	}
+	c.session.mu.Unlock()
+	restored := make([]*SharedFile, 0, len(state.SharedFiles))
+	for _, rec := range state.SharedFiles {
+		sf := &SharedFile{
+			Hash:        rec.Hash,
+			FileSize:    rec.Size,
+			Path:        rec.Path,
+			Name:        rec.Name,
+			PieceHashes: append([]protocol.Hash(nil), rec.PieceHashes...),
+			Origin:      rec.Origin,
+			Completed:   rec.Completed,
+			LastHashAt:  rec.LastHashAt,
+		}
+		if !validateSharedFileOnDisk(sf) {
+			continue
+		}
+		restored = append(restored, sf)
+	}
+	c.session.sharedStore.ReplaceAll(restored)
+	c.session.applyBannedPeers(state.BannedPeers)
+
+	for _, record := range state.Transfers {
+		if record.TargetPath == "" {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(record.TargetPath), 0o755); err != nil {
+			return err
+		}
+		atp := AddTransferParams{
+			Hash:        record.Hash,
+			CreateTime:  record.CreateTime,
+			Size:        record.Size,
+			FilePath:    record.TargetPath,
+			Paused:      record.Paused,
+			ResumeData:  cloneResumeData(record.ResumeData),
+			Handler:     disk.NewDesktopFileHandler(record.TargetPath),
+			HttpSources: append([]string(nil), record.HttpSources...),
+		}
+		handle, err := c.session.AddTransferParams(atp)
+		if err != nil {
+			return err
+		}
+		if handle.IsValid() {
+			handle.transfer.SetUploadPriority(record.UploadPrio)
+			handle.transfer.SetDownloadPriority(record.DownloadPrio)
+		}
+	}
+	return nil
+}
+
+func cloneResumeData(src *protocol.TransferResumeData) *protocol.TransferResumeData {
+	if src == nil {
+		return nil
+	}
+	dst := &protocol.TransferResumeData{
+		Hashes:           append([]protocol.Hash(nil), src.Hashes...),
+		Pieces:           protocol.NewBitField(src.Pieces.Len()),
+		DownloadedBlocks: append([]data.PieceBlock(nil), src.DownloadedBlocks...),
+		Peers:            append([]protocol.Endpoint(nil), src.Peers...),
+	}
+	for i := 0; i < src.Pieces.Len(); i++ {
+		if src.Pieces.GetBit(i) {
+			dst.Pieces.SetBit(i)
+		}
+	}
+	return dst
+}
