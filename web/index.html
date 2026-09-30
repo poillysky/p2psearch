@@ -2,9 +2,11 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#14181f" />
   <meta name="color-scheme" content="dark" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>P2P Search</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2314181f'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%232fad9a'/%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -27,11 +29,6 @@
   </header>
 
   <main class="compose">
-    <div class="status compose-status" id="status" aria-live="polite">
-      <span class="stat"><span class="dot" id="readyDot"></span><span id="readyText">检测中…</span></span>
-      <span class="stat">KAD <strong id="dhtNodes">-</strong></span>
-      <span class="stat">服务器 <strong id="serverCount">-</strong></span>
-    </div>
     <section class="hero-search">
       <h1 class="brand-hero">P2P Search</h1>
       <p class="lede">在 ED2K 与 KAD 里找冷门源，复制链接，直达离线。</p>
@@ -39,10 +36,16 @@
       <form class="search" id="form" role="search">
         <div class="search-shell">
           <label class="visually-hidden" for="q">搜索关键词</label>
-          <input type="search" id="q" name="q" placeholder="请输入关键词" required autofocus autocomplete="off" enterkeyhint="search" />
+          <input type="search" id="q" name="q" placeholder="请输入关键词" required autocomplete="off" enterkeyhint="search" />
           <button type="submit" id="btn">搜索</button>
         </div>
       </form>
+
+      <div class="status status-strip" id="status" aria-live="polite">
+        <span class="stat"><span class="dot" id="readyDot"></span><span id="readyText">检测中…</span></span>
+        <span class="stat">KAD <strong id="dhtNodes">-</strong></span>
+        <span class="stat">服务器 <strong id="serverCount">-</strong></span>
+      </div>
     </section>
 
     <section class="results-panel" aria-live="polite" aria-busy="false" id="resultsPanel">
@@ -76,9 +79,9 @@
           <thead>
             <tr>
               <th scope="col" class="col-name">文件名</th>
-              <th scope="col" class="col-num">大小</th>
-              <th scope="col" class="col-num">源数</th>
-              <th scope="col" class="col-source">来源</th>
+              <th scope="col" class="col-num desk-only">大小</th>
+              <th scope="col" class="col-num desk-only">源数</th>
+              <th scope="col" class="col-source desk-only">来源</th>
               <th scope="col" class="col-action">操作</th>
             </tr>
           </thead>

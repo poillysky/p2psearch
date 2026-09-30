@@ -3,7 +3,7 @@
 #
 # Do not commit real cookies / proxy passwords.
 http:
-    addr: :8080
+    addr: 0.0.0.0:8080
 proxy:
     url: ""
 engine:

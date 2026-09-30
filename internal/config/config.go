@@ -88,7 +88,7 @@ type App struct {
 // Default returns MVP defaults aligned with the project plan.
 func Default() App {
 	return App{
-		HTTPAddr:           ":8080",
+		HTTPAddr:           "0.0.0.0:8080",
 		ListenPort:         4661,
 		UDPPort:            4662,
 		EnableKAD:          true,
@@ -224,7 +224,7 @@ func applyEnv(app *App) {
 
 func normalize(app *App) {
 	if app.HTTPAddr == "" {
-		app.HTTPAddr = ":8080"
+		app.HTTPAddr = "0.0.0.0:8080"
 	}
 	if app.ListenPort <= 0 {
 		app.ListenPort = 4661

@@ -11,7 +11,7 @@ services:
       - ./config.yaml:/app/config.yaml:ro
     environment:
       CONFIG_PATH: /app/config.yaml
-      HTTP_ADDR: ":8080"
+      HTTP_ADDR: "0.0.0.0:8080"
       GOED2K_KAD: "1"
       GOED2K_UPNP: "0"
       # Optional:

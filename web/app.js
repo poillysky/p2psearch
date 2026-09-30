@@ -3,7 +3,7 @@ const tbody = $("tbody");
 const btn = $("btn");
 const toast = $("toast");
 const resultsPanel = $("resultsPanel");
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 20;
 
 let toastTimer;
 let searchDefaults = { wait: 25, limit: 0 };
@@ -83,11 +83,14 @@ function emptyState(title, detail, extraHtml) {
 
 function skeletonRows(n = 5) {
   return Array.from({ length: n }, () => `
-    <tr class="skeleton-row" aria-hidden="true">
-      <td><span class="skel w-name"></span></td>
-      <td class="num"><span class="skel w-sm"></span></td>
-      <td class="num"><span class="skel w-sm"></span></td>
-      <td><span class="skel w-src"></span></td>
+    <tr class="skeleton-row result-row" aria-hidden="true">
+      <td class="name">
+        <span class="skel w-name"></span>
+        <span class="row-meta"><span class="skel w-sm"></span><span class="skel w-src"></span></span>
+      </td>
+      <td class="num desk-only"><span class="skel w-sm"></span></td>
+      <td class="num desk-only"><span class="skel w-sm"></span></td>
+      <td class="source desk-only"><span class="skel w-src"></span></td>
       <td class="actions"><span class="skel w-btn"></span></td>
     </tr>`).join("");
 }
@@ -233,12 +236,22 @@ function rowHtml(r, absIndex, live) {
     ? `<button type="button" class="ghost offline-btn" data-offline="${absIndex}">转存 115</button>`
     : "";
   const name = String(r.filename || "");
+  const size = formatSize(r.size);
+  const sources = `${r.sources ?? 0}${r.complete_sources ? " / " + r.complete_sources : ""}`;
   return `
-    <tr${live ? ' class="live-in"' : ""}>
-      <td class="name"><span class="name-text" title="${escapeHtml(name)}">${escapeHtml(name)}</span></td>
-      <td class="num">${formatSize(r.size)}</td>
-      <td class="num">${r.sources ?? 0}${r.complete_sources ? " / " + r.complete_sources : ""}</td>
-      <td class="source"><span class="src-badge src-${escapeHtml(src)}">${escapeHtml(srcLabel)}</span></td>
+    <tr class="result-row${live ? " live-in" : ""}">
+      <td class="name">
+        <span class="name-text" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
+        <span class="row-meta">
+          <span class="row-meta-size">${escapeHtml(size)}</span>
+          <span class="row-meta-sep" aria-hidden="true">·</span>
+          <span class="row-meta-sources">${escapeHtml(sources)} 源</span>
+          <span class="src-badge src-${escapeHtml(src)}">${escapeHtml(srcLabel)}</span>
+        </span>
+      </td>
+      <td class="num desk-only">${escapeHtml(size)}</td>
+      <td class="num desk-only">${escapeHtml(sources)}</td>
+      <td class="source desk-only"><span class="src-badge src-${escapeHtml(src)}">${escapeHtml(srcLabel)}</span></td>
       <td class="actions">
         <button type="button" class="ghost copy-btn" data-i="${absIndex}">复制 ed2k</button>
         ${offlineBtn}

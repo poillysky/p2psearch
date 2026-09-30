@@ -298,8 +298,22 @@ func (e *Engine) search(ctx context.Context, query string, opts SearchOpts, emit
 		"kad", e.app.EnableKAD,
 	)
 
-	// First pass: stream hits live for the full wait budget (no settle early-exit).
-	snap = e.waitSearch(ctx, handle, wait, limit, onSnap)
+	// Remember every server we already queried so enrich rotates to fresh
+	// indexes instead of reconnecting the same peers we just dropped.
+	triedServers := make(map[string]struct{}, 64)
+	markTried := func(addrs ...string) {
+		for _, a := range addrs {
+			a = strings.TrimSpace(a)
+			if a != "" {
+				triedServers[a] = struct{}{}
+			}
+		}
+	}
+	markTried(e.connectedServerAddrs()...)
+	markTried(globalTargets...)
+
+	// First pass: stream hits live; plateau early so enrich gets wall-clock.
+	snap = e.waitSearch(ctx, handle, wait, limit, onSnap, true)
 	if emitter.failed() {
 		_ = handle.Stop()
 		return SearchResponse{}, emitter.errValue()
@@ -333,34 +347,56 @@ func (e *Engine) search(ctx context.Context, query string, opts SearchOpts, emit
 			break
 		}
 
-		backups := e.pickBackupServers()
-		if len(backups) == 0 {
-			// Pool is at MaxTotalServers — free non-priority slots and pull
-			// fresh server.met indexes so enrich is not a duplicate re-query.
-			freed := e.rotateNonPriorityServers(6)
-			if freed > 0 {
-				backups = e.pickBackupServers()
-			}
+		// Charset changes (GBK) keep/widen the TCP pool — indexes differ by
+		// encoding, so peers already hit with UTF-8 are still useful. Same-
+		// charset passes rotate away used non-priority peers and only dial
+		// addresses never tried on this query.
+		var fresh []string
+		changingCharset := charsetIdx < len(charsets)
+		if changingCharset {
+			fresh = e.pickBackupServers()
+		} else {
+			_ = e.rotateNonPriorityServers(6)
+			fresh = e.pickServersExcluding(triedServers, 6)
 		}
-		if len(backups) > 0 {
+		gotNewTCP := false
+		if len(fresh) > 0 {
 			e.log.Info("search enrich pass",
 				"query", query,
 				"pass", pass+1,
 				"have", len(snap.Results),
 				"connected", len(e.connectedServerAddrs()),
-				"backups", len(backups),
+				"fresh", len(fresh),
+				"charset_rotate", changingCharset,
 				"remain_ms", remain.Milliseconds(),
 			)
-			enrichDeadline := time.Now().Add(searchWarmupBudget(remain))
-			e.connectMany(backups, enrichDeadline)
+			enrichDeadline := time.Now().Add(enrichWarmupBudget(remain))
+			beforeTCP := e.connectedSet()
+			e.connectMany(fresh, enrichDeadline)
+			markTried(fresh...)
+			for _, a := range e.connectedServerAddrs() {
+				if _, was := beforeTCP[a]; !was {
+					gotNewTCP = true
+				}
+			}
 		} else if pass > 0 && charsetIdx >= len(charsets) {
+			e.log.Info("search enrich skip", "pass", pass+1, "reason", "no fresh servers or charset left")
 			break
 		}
 
 		charset := "utf8"
+		doingCharset := false
 		if charsetIdx < len(charsets) {
 			charset = charsets[charsetIdx]
 			charsetIdx++
+			doingCharset = true
+		}
+		// Pass 0 always runs at least one enrich (Global offset and/or GBK)
+		// even when every known TCP peer was already tried — otherwise English
+		// queries never enter enrich and "补搜" is a no-op.
+		if !doingCharset && !gotNewTCP && len(fresh) == 0 && pass > 0 {
+			e.log.Info("search enrich skip", "pass", pass+1, "reason", "nothing left to try")
+			break
 		}
 
 		prev := snap
@@ -369,23 +405,44 @@ func (e *Engine) search(ctx context.Context, query string, opts SearchOpts, emit
 
 		emitter.enterEnrich()
 
-		globTargets := e.globalSearchTargets(28, (pass+1)*24)
+		var globTargets []string
+		if charset != "utf8" {
+			// Charset pass: re-probe a broad Global set (encoding changes hits).
+			globTargets = e.globalSearchTargets(32, 0)
+		} else {
+			globTargets = e.globalSearchTargets(32, (pass+1)*20)
+			filtered := filterAddrs(globTargets, triedServers)
+			if len(filtered) >= 8 {
+				globTargets = filtered
+			}
+		}
+		markTried(globTargets...)
+
 		handle, err = e.client.StartSearch(ed2k.SearchParams{
 			Query:         query,
 			Scope:         scope,
 			Charset:       charset,
 			GlobalServers: globTargets,
-			GlobalMax:     28,
+			GlobalMax:     32,
 		})
 		if err != nil {
 			return SearchResponse{}, err
 		}
+		e.log.Info("search enrich querying",
+			"pass", pass+1,
+			"charset", charset,
+			"tcp", len(e.connectedServerAddrs()),
+			"global_udp", len(globTargets),
+			"new_tcp", gotNewTCP,
+		)
 		remain = wait - time.Since(started)
-		if remain < 3*time.Second {
-			remain = 3 * time.Second
+		if remain < 4*time.Second {
+			remain = 4 * time.Second
 		}
 		before := len(prev.Results)
-		snap = e.waitSearch(ctx, handle, remain, limit, onSnap)
+		// Enrich must spend its budget: early plateau would kill GBK/Global
+		// before unique hits arrive (seen as "补搜无新增").
+		snap = e.waitSearch(ctx, handle, remain, limit, onSnap, false)
 		if emitter.failed() {
 			_ = handle.Stop()
 			return SearchResponse{}, emitter.errValue()
@@ -395,7 +452,14 @@ func (e *Engine) search(ctx context.Context, query string, opts SearchOpts, emit
 			return SearchResponse{}, ctx.Err()
 		}
 		snap = mergeSearchSnapshots(prev, snap)
-		if len(snap.Results) <= before && charsetIdx >= len(charsets) && len(backups) == 0 {
+		gained := len(snap.Results) - before
+		e.log.Info("search enrich merged",
+			"pass", pass+1,
+			"have", len(snap.Results),
+			"gained", gained,
+			"charset", charset,
+		)
+		if gained <= 0 && charsetIdx >= len(charsets) && !gotNewTCP {
 			e.log.Info("search enrich plateau", "have", len(snap.Results), "pass", pass+1)
 			break
 		}
@@ -436,16 +500,12 @@ func (e *Engine) search(ctx context.Context, query string, opts SearchOpts, emit
 
 // waitSearch polls the search handle until the natural end or the wait budget.
 //
-// It does NOT settle-exit when the stream goes quiet early in the TCP phase:
-// late server batches still matter. Once every TCP server has reported (or the
-// server hard-ceiling fired) and the unique-hit count has been flat for a
-// couple of seconds, it returns early so the caller can spend the remaining
-// wait on enrich rotation — otherwise Global/KAD keep the handle "RUNNING"
-// for the full budget while the UI shows a frozen count.
-//
-// Stop conditions: Finished/Stopped/Failed, explicit limit, ctx cancel, budget,
-// or post-TCP plateau (see above).
-func (e *Engine) waitSearch(ctx context.Context, handle ed2k.SearchHandle, budget time.Duration, limit int, onSnap func(ed2k.SearchSnapshot)) ed2k.SearchSnapshot {
+// When allowPlateau is true (first pass), once TCP is done and the unique-hit
+// count has been flat for a couple of seconds, it returns early so enrich can
+// spend the remaining wait on fresh servers / GBK. Enrich passes must pass
+// allowPlateau=false — otherwise Global/GBK get killed mid-collect and the UI
+// shows "补搜无新增".
+func (e *Engine) waitSearch(ctx context.Context, handle ed2k.SearchHandle, budget time.Duration, limit int, onSnap func(ed2k.SearchSnapshot), allowPlateau bool) ed2k.SearchSnapshot {
 	deadline := time.Now().Add(budget)
 	started := time.Now()
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -485,8 +545,6 @@ func (e *Engine) waitSearch(ctx context.Context, handle ed2k.SearchHandle, budge
 			break
 		}
 
-		// TCP fan-out complete (or never started): remember when the phase
-		// went idle so we can plateau-exit while Global/KAD are still open.
 		if !snap.ServerBusy {
 			if !tcpDoneSeen {
 				tcpDoneSeen = true
@@ -514,27 +572,31 @@ func (e *Engine) waitSearch(ctx context.Context, handle ed2k.SearchHandle, budge
 				report(snap)
 				return snap
 			}
-			// Plateau after TCP: leave budget for enrich. Require a short
-			// grace so a slow first Global/KAD batch can still land.
-			if tcpDoneSeen && n > 0 &&
-				now.Sub(started) >= 4*time.Second &&
-				now.Sub(tcpDoneAt) >= 1500*time.Millisecond &&
+			if allowPlateau && tcpDoneSeen && n > 0 &&
 				!lastGrowth.IsZero() && now.Sub(lastGrowth) >= 2500*time.Millisecond &&
 				(snap.GlobalBusy || snap.DHTBusy) {
-				e.log.Info("search plateau after TCP — handing rest to enrich",
-					"have", n,
-					"elapsed_ms", now.Sub(started).Milliseconds(),
-					"global", snap.GlobalBusy,
-					"kad", snap.DHTBusy,
-				)
-				_ = handle.Stop()
-				time.Sleep(80 * time.Millisecond)
-				latest := handle.Snapshot()
-				if len(latest.Results) >= len(snap.Results) {
-					snap = latest
+				// Sparse queries (typical CJK on EU indexes) gain more from
+				// letting Global/KAD finish than from an empty enrich loop.
+				minElapsed := 4 * time.Second
+				if n < 100 {
+					minElapsed = 10 * time.Second
 				}
-				report(snap)
-				return snap
+				if now.Sub(started) >= minElapsed && now.Sub(tcpDoneAt) >= 1500*time.Millisecond {
+					e.log.Info("search plateau after TCP — handing rest to enrich",
+						"have", n,
+						"elapsed_ms", now.Sub(started).Milliseconds(),
+						"global", snap.GlobalBusy,
+						"kad", snap.DHTBusy,
+					)
+					_ = handle.Stop()
+					time.Sleep(80 * time.Millisecond)
+					latest := handle.Snapshot()
+					if len(latest.Results) >= len(snap.Results) {
+						snap = latest
+					}
+					report(snap)
+					return snap
+				}
 			}
 		}
 	}
@@ -645,20 +707,29 @@ func (e *Engine) ensureConnected(addrs []string, label string, deadline time.Tim
 // cap, preferring server.met entries ranked by file count (bigger indexes) and
 // falling back to the static all_servers list. Handshake-timeout servers are
 // tried only after healthier ones (never removed from the met ranking).
-//
-// It performs no network I/O: the ranked list is cached by bootstrapServers.
-// Returning nil once the pool is full is deliberate — the previous behaviour of
-// always returning another batch made the connection pool grow on every search.
 func (e *Engine) pickBackupServers() []string {
-	connected := e.connectedSet()
-	need := e.app.MaxTotalServers - len(connected)
+	return e.pickServersExcluding(nil, e.app.MaxTotalServers)
+}
+
+// pickServersExcluding returns up to `need` backup addresses that are not
+// currently connected, not in the priority list, and not in exclude (servers
+// already queried during this search).
+func (e *Engine) pickServersExcluding(exclude map[string]struct{}, need int) []string {
 	if need <= 0 {
 		return nil
+	}
+	connected := e.connectedSet()
+	slots := e.app.MaxTotalServers - len(connected)
+	if slots <= 0 {
+		return nil
+	}
+	if need > slots {
+		need = slots
 	}
 
 	priority := make(map[string]struct{})
 	for _, a := range e.app.PrioritySlice() {
-		priority[a] = struct{}{}
+		priority[strings.TrimSpace(a)] = struct{}{}
 	}
 
 	seen := make(map[string]struct{}, len(connected)+len(e.app.AllServers)+32)
@@ -667,6 +738,9 @@ func (e *Engine) pickBackupServers() []string {
 	}
 	for a := range priority {
 		seen[a] = struct{}{}
+	}
+	for a := range exclude {
+		seen[strings.TrimSpace(a)] = struct{}{}
 	}
 
 	e.discMu.RLock()
@@ -692,7 +766,6 @@ func (e *Engine) pickBackupServers() []string {
 		addCand(addr)
 	}
 
-	// Stable partition: allowed (healthy / retry-due) first, demoted later.
 	primary, demoted := make([]string, 0, len(candidates)), make([]string, 0, len(candidates))
 	for _, addr := range candidates {
 		if e.health != nil && !e.health.AllowConnect(addr) {
@@ -722,6 +795,24 @@ func (e *Engine) pickBackupServers() []string {
 		if len(out) >= need {
 			break
 		}
+	}
+	return out
+}
+
+func filterAddrs(addrs []string, exclude map[string]struct{}) []string {
+	if len(exclude) == 0 {
+		return addrs
+	}
+	out := make([]string, 0, len(addrs))
+	for _, a := range addrs {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			continue
+		}
+		if _, skip := exclude[a]; skip {
+			continue
+		}
+		out = append(out, a)
 	}
 	return out
 }
@@ -765,7 +856,7 @@ func (e *Engine) refreshDiscoveredServers() {
 	if len(e.app.ServerMetURLs) == 0 {
 		return
 	}
-	list := e.ListServerMetAddresses(e.app.ServerMetURLs, 100)
+	list := e.ListServerMetAddresses(e.app.ServerMetURLs, 200)
 	if list.Count == 0 {
 		e.log.Warn("server.met produced no usable servers", "sources", len(e.app.ServerMetURLs))
 		return
@@ -911,6 +1002,22 @@ func searchWarmupBudget(wait time.Duration) time.Duration {
 	}
 	if budget < 300*time.Millisecond {
 		budget = 300 * time.Millisecond
+	}
+	return budget
+}
+
+// enrichWarmupBudget gives backup handshakes more time than the cold-start
+// warm-up: enrich only pays off if at least one fresh TCP session lands.
+func enrichWarmupBudget(remain time.Duration) time.Duration {
+	budget := remain / 4
+	if budget > 5*time.Second {
+		budget = 5 * time.Second
+	}
+	if budget < 2*time.Second {
+		budget = 2 * time.Second
+	}
+	if budget > remain/2 && remain > 0 {
+		budget = remain / 2
 	}
 	return budget
 }
